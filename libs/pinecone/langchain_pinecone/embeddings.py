@@ -1,10 +1,16 @@
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
-import aiohttp
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import secret_from_env
 from pinecone import Pinecone as PineconeClient  # type: ignore[import-untyped]
+from pinecone import (
+    PineconeAsyncio as PineconeAsyncioClient,  # type: ignore[import-untyped]
+)
+from pinecone import SparseValues
+from pinecone.data.features.inference.inference import (  # type: ignore[import-untyped]
+    EmbeddingsList,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -33,7 +39,7 @@ class PineconeEmbeddings(BaseModel, Embeddings):
 
     # Clients
     _client: PineconeClient = PrivateAttr(default=None)
-    _async_client: Optional[aiohttp.ClientSession] = PrivateAttr(default=None)
+    _async_client: Optional[PineconeAsyncioClient] = PrivateAttr(default=None)
     model: str
     """Model to use for example 'multilingual-e5-large'."""
     # Config
@@ -66,15 +72,11 @@ class PineconeEmbeddings(BaseModel, Embeddings):
     )
 
     @property
-    def async_client(self) -> aiohttp.ClientSession:
+    def async_client(self) -> PineconeAsyncioClient:
         """Lazily initialize the async client."""
         if self._async_client is None:
-            self._async_client = aiohttp.ClientSession(
-                headers={
-                    "Api-Key": self.pinecone_api_key.get_secret_value(),
-                    "Content-Type": "application/json",
-                    "X-Pinecone-API-Version": "2024-10",
-                }
+            self._async_client = PineconeAsyncioClient(
+                api_key=self.pinecone_api_key.get_secret_value(), source_tag="langchain"
             )
         return self._async_client
 
@@ -88,7 +90,7 @@ class PineconeEmbeddings(BaseModel, Embeddings):
                 "query_params": {"input_type": "query", "truncation": "END"},
                 "document_params": {"input_type": "passage", "truncation": "END"},
                 "dimension": 1024,
-            }
+            },
         }
         model = values.get("model")
         if model in default_config_map:
@@ -108,7 +110,7 @@ class PineconeEmbeddings(BaseModel, Embeddings):
         # Ensure async_client is lazily initialized
         return self
 
-    def _get_batch_iterator(self, texts: List[str]) -> Iterable:
+    def _get_batch_iterator(self, texts: List[str]) -> tuple[Iterable, int]:
         if self.batch_size is None:
             batch_size = DEFAULT_BATCH_SIZE
         else:
@@ -127,18 +129,18 @@ class PineconeEmbeddings(BaseModel, Embeddings):
         else:
             _iter = range(0, len(texts), batch_size)
 
-        return _iter
+        return _iter, batch_size
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed search docs."""
         embeddings: List[List[float]] = []
 
-        _iter = self._get_batch_iterator(texts)
+        _iter, batch_size = self._get_batch_iterator(texts)
         for i in _iter:
-            response = self._client.inference.embed(
+            response = self._embed_texts(
                 model=self.model,
                 parameters=self.document_params,
-                inputs=texts[i : i + self.batch_size],
+                texts=texts[i : i + batch_size],
             )
             embeddings.extend([r["values"] for r in response])
 
@@ -146,41 +148,130 @@ class PineconeEmbeddings(BaseModel, Embeddings):
 
     async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
         embeddings: List[List[float]] = []
-        _iter = self._get_batch_iterator(texts)
+        _iter, batch_size = self._get_batch_iterator(texts)
         for i in _iter:
             response = await self._aembed_texts(
                 model=self.model,
                 parameters=self.document_params,
-                texts=texts[i : i + self.batch_size],
+                texts=texts[i : i + batch_size],
             )
-            embeddings.extend([r["values"] for r in response["data"]])
+            embeddings.extend([r["values"] for r in response])
         return embeddings
 
     def embed_query(self, text: str) -> List[float]:
         """Embed query text."""
-        return self._client.inference.embed(
-            model=self.model, parameters=self.query_params, inputs=[text]
+        return self._embed_texts(
+            model=self.model, parameters=self.query_params, texts=[text]
         )[0]["values"]
 
     async def aembed_query(self, text: str) -> List[float]:
         """Asynchronously embed query text."""
-        response = await self._aembed_texts(
+        embeddings = await self._aembed_texts(
             model=self.model,
             parameters=self.document_params,
             texts=[text],
         )
-        return response["data"][0]["values"]
+        return embeddings[0]["values"]
+
+    def _embed_texts(
+        self, texts: List[str], model: str, parameters: dict
+    ) -> EmbeddingsList:
+        return self._client.inference.embed(
+            model=model, inputs=texts, parameters=parameters
+        )
 
     async def _aembed_texts(
         self, texts: List[str], model: str, parameters: dict
-    ) -> Dict:
-        data = {
-            "model": model,
-            "inputs": [{"text": text} for text in texts],
-            "parameters": parameters,
+    ) -> EmbeddingsList:
+        async with self.async_client as aclient:
+            embeddings: EmbeddingsList = await aclient.inference.embed(
+                model=model, inputs=texts, parameters=parameters
+            )
+            return embeddings
+
+
+class PineconeSparseEmbeddings(PineconeEmbeddings):
+    """PineconeSparseEmbeddings embedding model.
+
+    Example:
+        .. code-block:: python
+
+            from langchain_pinecone import PineconeSparseEmbeddings
+
+            model = PineconeSparseEmbeddings(model="pinecone-sparse-english-v0")
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_default_config(cls, values: dict) -> Any:
+        """Set default configuration based on model."""
+        default_config_map = {
+            "pinecone-sparse-english-v0": {
+                "batch_size": 96,
+                "query_params": {"input_type": "query", "truncation": "END"},
+                "document_params": {"input_type": "passage", "truncation": "END"},
+                "dimension": None,
+            },
         }
-        async with self.async_client.post(
-            "https://api.pinecone.io/embed", json=data
-        ) as response:
-            response_data = await response.json(content_type=None)
-            return response_data
+        model = values.get("model")
+        if model in default_config_map:
+            config = default_config_map[model]
+            for key, value in config.items():
+                if key not in values:
+                    values[key] = value
+        return values
+
+    def embed_documents(self, texts: List[str]) -> List[SparseValues]:
+        """Embed search docs with sparse embeddings."""
+        embeddings: List[SparseValues] = []
+
+        _iter, batch_size = self._get_batch_iterator(texts)
+        for i in _iter:
+            response = self._embed_texts(
+                model=self.model,
+                parameters=self.document_params,
+                texts=texts[i : i + batch_size],
+            )
+            for r in response:
+                embeddings.append(
+                    SparseValues(indices=r["sparse_indices"], values=r["sparse_values"])
+                )
+
+        return embeddings
+
+    async def aembed_documents(self, texts: List[str]) -> List[SparseValues]:
+        """Asynchronously embed search docs with sparse embeddings."""
+        embeddings: List[SparseValues] = []
+        _iter, batch_size = self._get_batch_iterator(texts)
+        for i in _iter:
+            response = await self._aembed_texts(
+                model=self.model,
+                parameters=self.document_params,
+                texts=texts[i : i + batch_size],
+            )
+            for r in response:
+                embeddings.append(
+                    SparseValues(indices=r["sparse_indices"], values=r["sparse_values"])
+                )
+        return embeddings
+
+    def embed_query(self, text: str) -> SparseValues:
+        """Embed query text with sparse embeddings."""
+        response = self._embed_texts(
+            model=self.model, parameters=self.query_params, texts=[text]
+        )[0]
+        return SparseValues(
+            indices=response["sparse_indices"], values=response["sparse_values"]
+        )
+
+    async def aembed_query(self, text: str) -> SparseValues:
+        """Asynchronously embed query text with sparse embeddings."""
+        embeddings = await self._aembed_texts(
+            model=self.model,
+            parameters=self.query_params,
+            texts=[text],
+        )
+        response = embeddings[0]
+        return SparseValues(
+            indices=response["sparse_indices"], values=response["sparse_values"]
+        )
