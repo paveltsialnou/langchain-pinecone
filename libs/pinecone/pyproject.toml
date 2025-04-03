@@ -10,11 +10,11 @@ dependencies = [
     "langchain-core<1.0.0,>=0.3.34",
     "pinecone[async]>=6.0.0,<7.0.0",
     "aiohttp<3.11,>=3.10",
-    "numpy<2.0.0,>=1.26.4",
+    "numpy>=1.26.4",
     "langchain-tests<1.0.0,>=0.3.7",
 ]
 name = "langchain-pinecone"
-version = "0.2.4rc1"
+version = "0.2.4rc2"
 description = "An integration package connecting Pinecone and LangChain"
 readme = "README.md"
 
@@ -46,7 +46,7 @@ disallow_untyped_defs = "True"
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "T201"]
+select = ["E", "F", "I", "T201", "NPY201"]
 ignore = ["E501"]
 
 [tool.coverage.run]
