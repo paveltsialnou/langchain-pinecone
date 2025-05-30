@@ -10,6 +10,39 @@ from pydantic import SecretStr
 from langchain_pinecone.rerank import PineconeRerank
 
 
+# helper function for testing shared assertions in later rerank tests
+def check_rerank_call_and_results(
+    mock_client: MagicMock,
+    mock_rerank_response: MagicMock,
+    expected_model: str,
+    expected_parameters: Dict[str, Any],
+    results: list[dict[str, Any]],
+) -> None:
+    mock_client.inference.rerank.assert_called_once_with(
+        model=expected_model,
+        query="test query",
+        documents=[
+            {"id": "doc_0", "text": "doc_1 content"},
+            {"id": "doc_1", "text": "doc_2 content"},
+            {"id": "doc_2", "text": "doc_3 content"},
+        ],
+        rank_fields=["text"],
+        top_n=2,
+        return_documents=True,
+        parameters=expected_parameters,
+    )
+
+    assert len(results) == 2
+    assert results[0]["id"] == "doc_0"
+    assert results[0]["score"] == 0.9
+    assert results[0]["index"] == 0
+    assert results[0]["document"] == {"id": "doc_0", "text": "Document 1 content"}
+    assert results[1]["id"] == "doc_1"
+    assert results[1]["score"] == 0.7
+    assert results[1]["index"] == 1
+    assert results[1]["document"] == {"id": "doc_1", "text": "Document 2 content"}
+
+
 class TestPineconeRerank:
     @pytest.fixture
     def mock_pinecone_client(self) -> MagicMock:
@@ -179,15 +212,24 @@ class TestPineconeRerank:
         assert results == []
         mock_pinecone_client.inference.rerank.assert_not_called()
 
-    def test_rerank_calls_api_and_formats_results(
-        self, mock_pinecone_client: MagicMock, mock_rerank_response: MagicMock
+    @pytest.mark.parametrize(
+        "model,expected_parameters",
+        [
+            ("cohere-rerank-3.5", {}),  # Test 'cohere' disables 'truncate'
+            ("test-model", {"truncate": "END"}),  # Test default includes 'truncate'
+        ],
+    )
+    def test_rerank_models(
+        self,
+        mock_pinecone_client: MagicMock,
+        mock_rerank_response: MagicMock,
+        model: str,
+        expected_parameters: Dict[str, Any],
     ) -> None:
-        """Test rerank calls API with correct args and formats results."""
         mock_pinecone_client.inference.rerank.return_value = mock_rerank_response
-
         reranker = PineconeRerank(
             client=mock_pinecone_client,
-            model="test-model",
+            model=model,
             top_n=2,
             rank_fields=["text"],
             return_documents=True,
@@ -196,30 +238,13 @@ class TestPineconeRerank:
         query = "test query"
 
         results = reranker.rerank(documents, query)
-
-        mock_pinecone_client.inference.rerank.assert_called_once_with(
-            model="test-model",
-            query=query,
-            documents=[
-                {"id": "doc_0", "text": "doc_1 content"},
-                {"id": "doc_1", "text": "doc_2 content"},
-                {"id": "doc_2", "text": "doc_3 content"},
-            ],
-            rank_fields=["text"],
-            top_n=2,
-            return_documents=True,
-            parameters={"truncate": "END"},
+        check_rerank_call_and_results(
+            mock_pinecone_client,
+            mock_rerank_response,
+            model,
+            expected_parameters,
+            results,
         )
-
-        assert len(results) == 2
-        assert results[0]["id"] == mock_rerank_response.data[0].id
-        assert results[0]["score"] == mock_rerank_response.data[0].score
-        assert results[0]["document"]["id"] == mock_rerank_response.data[0].document.id
-        assert results[0]["document"]["text"] == "Document 1 content"
-        assert results[1]["id"] == mock_rerank_response.data[1].id
-        assert results[1]["score"] == mock_rerank_response.data[1].score
-        assert results[1]["document"]["id"] == mock_rerank_response.data[1].document.id
-        assert results[1]["document"]["text"] == "Document 2 content"
 
     def test_compress_documents(
         self, mock_pinecone_client: MagicMock, mock_rerank_response: MagicMock
@@ -409,15 +434,24 @@ class TestPineconeRerank:
         mock_pinecone_async_client.inference.rerank.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_arerank_calls_api_and_formats_results(
-        self, mock_pinecone_async_client: MagicMock, mock_rerank_response: MagicMock
+    @pytest.mark.parametrize(
+        "model,expected_parameters",
+        [
+            ("cohere-rerank-3.5", {}),  # Test 'cohere' disables 'truncate'
+            ("test-model", {"truncate": "END"}),  # Test default includes 'truncate'
+        ],
+    )
+    async def test_arerank_models(
+        self,
+        mock_pinecone_async_client: MagicMock,
+        mock_rerank_response: MagicMock,
+        model: str,
+        expected_parameters: Dict[str, Any],
     ) -> None:
-        """Test arerank calls API with correct args and formats results."""
         mock_pinecone_async_client.inference.rerank.return_value = mock_rerank_response
-
         reranker = PineconeRerank(
             async_client=mock_pinecone_async_client,
-            model="test-model",
+            model=model,
             top_n=2,
             rank_fields=["text"],
             return_documents=True,
@@ -426,31 +460,13 @@ class TestPineconeRerank:
         query = "test query"
 
         results = await reranker.arerank(documents, query)
-
-        mock_pinecone_async_client.inference.rerank.assert_called_once_with(
-            model="test-model",
-            query=query,
-            documents=[
-                {"id": "doc_0", "text": "doc_1 content"},
-                {"id": "doc_1", "text": "doc_2 content"},
-                {"id": "doc_2", "text": "doc_3 content"},
-            ],
-            rank_fields=["text"],
-            top_n=2,
-            return_documents=True,
-            parameters={"truncate": "END"},
+        check_rerank_call_and_results(
+            mock_pinecone_async_client,
+            mock_rerank_response,
+            model,
+            expected_parameters,
+            results,
         )
-
-        assert len(results) == 2
-        assert results[0]["id"] == "doc_0"
-        assert results[0]["score"] == 0.9
-        assert results[0]["index"] == 0
-        assert results[0]["document"] == {"id": "doc_0", "text": "Document 1 content"}
-
-        assert results[1]["id"] == "doc_1"
-        assert results[1]["score"] == 0.7
-        assert results[1]["index"] == 1
-        assert results[1]["document"] == {"id": "doc_1", "text": "Document 2 content"}
 
     async def test_acompress_documents(
         self, mock_pinecone_async_client: MagicMock, mock_rerank_response: MagicMock
