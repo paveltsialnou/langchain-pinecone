@@ -13,6 +13,7 @@ dependencies = [
     "langchain-openai>=0.3.11",
     "httpx>=0.28.0",
     "simsimd>=5.9.11",
+    "pydantic>=2.11.1",
 ]
 name = "langchain-pinecone"
 version = "0.2.12"

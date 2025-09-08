@@ -19,11 +19,11 @@ import numpy as np
 from langchain_core._api.deprecation import deprecated
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_core.pydantic_v1 import SecretStr
 from langchain_core.utils.iter import batch_iterate
 from langchain_core.vectorstores import VectorStore
 from pinecone import Pinecone as PineconeClient
 from pinecone import PineconeAsyncio as PineconeAsyncioClient
+from pydantic import SecretStr
 
 # conditional imports based on pinecone version
 try:
