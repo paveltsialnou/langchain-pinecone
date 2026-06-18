@@ -5,14 +5,12 @@ build-backend = "pdm.backend"
 [project]
 authors = []
 license = { text = "MIT" }
-requires-python = "<3.14,>=3.9"
+requires-python = "<3.14,>=3.10"
 dependencies = [
-    "langchain-core<2.0.0,>=0.3.34",
+    "langchain-core<2.0.0,>=1.2.11",
     "pinecone[asyncio]>=6.0.0,<8.0.0",
     "numpy>=1.26.4,!=2.0.2",
-    "langchain-openai>=0.3.11",
     "httpx>=0.28.0",
-    "simsimd>=5.9.11",
     "pydantic>=2.11.1",
 ]
 name = "langchain-pinecone"
@@ -25,19 +23,24 @@ readme = "README.md"
 "Release Notes" = "https://github.com/langchain-ai/langchain/releases?q=tag%3A%22langchain-pinecone%3D%3D0%22&expanded=true"
 repository = "https://github.com/langchain-ai/langchain-pinecone"
 
+[project.optional-dependencies]
+speedups = ["simsimd>=5.9.11"]
+
 [dependency-groups]
 test = [
-    "pytest<9,>=8",
+    "pytest>=9.0.3,<10",
     "freezegun<2.0.0,>=1.2.2",
     "pytest-mock<4.0.0,>=3.10.0",
-    "syrupy<5.0.0,>=4.0.2",
+    "pytest-cov>=6.0.0,<7",
+    "syrupy>=5.0.0,<6",
     "pytest-watcher<1.0.0,>=0.3.4",
-    "pytest-asyncio<1,>=0.25.0",
+    "pytest-asyncio>=1.0.0,<2",
     "pytest-socket<1.0.0,>=0.7.0",
     "langchain-tests>=0.3.17",
+    "simsimd>=5.9.11",
 ]
 codespell = ["codespell<3.0.0,>=2.2.0"]
-test_integration = ["langchain-openai<0.4,>=0.3.6"]
+test_integration = []
 lint = ["ruff<1.0,>=0.5"]
 dev = [
     "ipykernel>=6.29.5",
@@ -59,6 +62,7 @@ select = ["E", "F", "I", "T201", "NPY201"]
 ignore = ["E501"]
 
 [tool.coverage.run]
+source = ["langchain_pinecone"]
 omit = ["tests/*"]
 
 [tool.pytest.ini_options]

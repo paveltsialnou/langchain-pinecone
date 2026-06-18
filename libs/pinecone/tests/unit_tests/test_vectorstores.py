@@ -1,10 +1,12 @@
-from typing import TYPE_CHECKING, Type
+import logging
+from typing import TYPE_CHECKING, Callable, Type
 from unittest.mock import ANY, Mock, call
 
 import pytest
 from pinecone import PineconeAsyncio, SparseValues  # type: ignore[import-untyped]
 from pytest_mock import AsyncMockType, MockerFixture, MockType
 
+from langchain_pinecone._utilities import DistanceStrategy
 from langchain_pinecone.embeddings import PineconeEmbeddings, PineconeSparseEmbeddings
 from langchain_pinecone.vectorstores import PineconeVectorStore
 from langchain_pinecone.vectorstores_sparse import PineconeSparseVectorStore
@@ -666,3 +668,625 @@ async def test_asimilarity_search_by_vector_with_score__defaults_to_store_namesp
     )
 
     assert mock_async_index.query.call_args.kwargs["namespace"] == "default-ns"
+
+
+def test_sparse_similarity_search_by_vector_with_score(
+    mocker: MockerFixture,
+    mock_index: MockType,
+    mock_sparse_embedding: AsyncMockType,
+) -> None:
+    """Sync sparse similarity search returns (Document, score) with correct fields."""
+    mock_index.query = mocker.Mock(
+        return_value={
+            "matches": [
+                {
+                    "metadata": {"text": "test doc", "source": "unit"},
+                    "score": 0.9,
+                    "id": "doc-1",
+                }
+            ]
+        }
+    )
+    vectorstore = PineconeSparseVectorStore(
+        index=mock_index, embedding=mock_sparse_embedding, text_key="text"
+    )
+    embedding = SparseValues(indices=[0, 1], values=[0.5, 0.3])
+    results = vectorstore.similarity_search_by_vector_with_score(embedding)
+
+    assert len(results) == 1
+    doc, score = results[0]
+    assert doc.page_content == "test doc"
+    assert doc.metadata == {"source": "unit"}
+    assert doc.id == "doc-1"
+    assert score == 0.9
+    assert mock_index.query.call_args.kwargs["sparse_vector"] == embedding
+
+
+@pytest.mark.asyncio
+async def test_asparse_similarity_search_by_vector_with_score(
+    mocker: MockerFixture,
+    mock_async_index: MockType,
+    mock_sparse_embedding: AsyncMockType,
+) -> None:
+    """Async sparse similarity search returns (Document, score) with correct fields."""
+    mock_async_index.query = mocker.AsyncMock(
+        return_value={
+            "matches": [
+                {
+                    "metadata": {"text": "test doc", "source": "unit"},
+                    "score": 0.9,
+                    "id": "doc-1",
+                }
+            ]
+        }
+    )
+    vectorstore = PineconeSparseVectorStore(
+        index=mock_async_index, embedding=mock_sparse_embedding, text_key="text"
+    )
+    embedding = SparseValues(indices=[0, 1], values=[0.5, 0.3])
+    results = await vectorstore.asimilarity_search_by_vector_with_score(embedding)
+
+    assert len(results) == 1
+    doc, score = results[0]
+    assert doc.page_content == "test doc"
+    assert doc.metadata == {"source": "unit"}
+    assert doc.id == "doc-1"
+    assert score == 0.9
+    assert mock_async_index.query.call_args.kwargs["sparse_vector"] == embedding
+
+
+def test_sparse_mmr_search_by_vector(
+    mocker: MockerFixture,
+    mock_index: MockType,
+    mock_sparse_embedding: AsyncMockType,
+) -> None:
+    """Sync MMR search sets include_values=True and returns MMR-selected documents."""
+    sparse_vals = {"indices": [0, 1], "values": [0.5, 0.3]}
+    mock_index.query = mocker.Mock(
+        return_value={
+            "matches": [
+                {
+                    "metadata": {"text": "doc 1", "source": "a"},
+                    "score": 0.9,
+                    "id": "id-1",
+                    "sparse_values": sparse_vals,
+                },
+                {
+                    "metadata": {"text": "doc 2", "source": "b"},
+                    "score": 0.8,
+                    "id": "id-2",
+                    "sparse_values": sparse_vals,
+                },
+            ]
+        }
+    )
+    mocker.patch(
+        "langchain_pinecone.vectorstores_sparse.sparse_maximal_marginal_relevance",
+        return_value=[0],
+    )
+    vectorstore = PineconeSparseVectorStore(
+        index=mock_index, embedding=mock_sparse_embedding, text_key="text"
+    )
+    embedding = SparseValues(indices=[0, 1], values=[0.5, 0.3])
+    results = vectorstore.max_marginal_relevance_search_by_vector(embedding, k=1)
+
+    assert mock_index.query.call_args.kwargs["include_values"] is True
+    assert len(results) == 1
+    assert results[0].page_content == "doc 1"
+
+
+@pytest.mark.asyncio
+async def test_asparse_mmr_search_by_vector(
+    mocker: MockerFixture,
+    mock_async_index: MockType,
+    mock_sparse_embedding: AsyncMockType,
+) -> None:
+    """Async MMR search sets include_values=True and returns MMR-selected documents."""
+    sparse_vals = {"indices": [0, 1], "values": [0.5, 0.3]}
+    mock_async_index.query = mocker.AsyncMock(
+        return_value={
+            "matches": [
+                {
+                    "metadata": {"text": "doc 1", "source": "a"},
+                    "score": 0.9,
+                    "id": "id-1",
+                    "sparse_values": sparse_vals,
+                },
+                {
+                    "metadata": {"text": "doc 2", "source": "b"},
+                    "score": 0.8,
+                    "id": "id-2",
+                    "sparse_values": sparse_vals,
+                },
+            ]
+        }
+    )
+    mocker.patch(
+        "langchain_pinecone.vectorstores_sparse.sparse_maximal_marginal_relevance",
+        return_value=[0],
+    )
+    vectorstore = PineconeSparseVectorStore(
+        index=mock_async_index, embedding=mock_sparse_embedding, text_key="text"
+    )
+    embedding = SparseValues(indices=[0, 1], values=[0.5, 0.3])
+    results = await vectorstore.amax_marginal_relevance_search_by_vector(embedding, k=1)
+
+    assert mock_async_index.query.call_args.kwargs["include_values"] is True
+    assert len(results) == 1
+    assert results[0].page_content == "doc 1"
+
+
+def test_sparse_search_skips_match_without_text_key(
+    mocker: MockerFixture,
+    mock_index: MockType,
+    mock_sparse_embedding: AsyncMockType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A match missing text_key is skipped and a warning is logged."""
+    mock_index.query = mocker.Mock(
+        return_value={
+            "matches": [
+                {"metadata": {"source": "no-text"}, "score": 0.9, "id": "bad"},
+                {"metadata": {"text": "valid doc"}, "score": 0.8, "id": "good"},
+            ]
+        }
+    )
+    vectorstore = PineconeSparseVectorStore(
+        index=mock_index, embedding=mock_sparse_embedding, text_key="text"
+    )
+    embedding = SparseValues(indices=[0], values=[0.5])
+    with caplog.at_level(
+        logging.WARNING, logger="langchain_pinecone.vectorstores_sparse"
+    ):
+        results = vectorstore.similarity_search_by_vector_with_score(embedding)
+
+    assert len(results) == 1
+    assert results[0][0].page_content == "valid doc"
+    assert "Skipping" in caplog.text
+
+
+def test_sparse_vectorstore_rejects_dense_index(
+    mock_index: MockType,
+    mock_sparse_embedding: AsyncMockType,
+) -> None:
+    """Construction raises ValueError when the index's vector_type is not sparse."""
+    mock_index.describe_index_stats.return_value = {"vector_type": "dense"}
+    with pytest.raises(ValueError, match="Sparse Indexes"):
+        PineconeSparseVectorStore(
+            index=mock_index, embedding=mock_sparse_embedding, text_key="text"
+        )
+
+
+# --- TC-005: PineconeVectorStore constructor entrypoints ---
+
+
+def test_get_pinecone_index_returns_named(
+    mocker: MockerFixture, mock_index: MockType
+) -> None:
+    """get_pinecone_index returns the named Index when the name is present in the project."""
+    mock_client_cls = mocker.patch("langchain_pinecone.vectorstores.PineconeClient")
+    mock_client = mock_client_cls.return_value
+    mock_client.Index.return_value = mock_index
+
+    existing = mocker.Mock()
+    existing.name = "my-index"
+    mock_client.list_indexes.return_value.index_list = {"indexes": [existing]}
+
+    result = PineconeVectorStore.get_pinecone_index(
+        "my-index", pinecone_api_key="test-key"
+    )
+
+    assert result is mock_index
+    mock_client.Index.assert_called_once_with("my-index")
+
+
+def test_get_pinecone_index_no_indexes_raises(mocker: MockerFixture) -> None:
+    """get_pinecone_index raises ValueError when the project has no active indexes."""
+    mock_client_cls = mocker.patch("langchain_pinecone.vectorstores.PineconeClient")
+    mock_client_cls.return_value.list_indexes.return_value.index_list = {"indexes": []}
+
+    with pytest.raises(ValueError, match="No active indexes"):
+        PineconeVectorStore.get_pinecone_index("any-name", pinecone_api_key="test-key")
+
+
+def test_get_pinecone_index_unknown_name_raises(mocker: MockerFixture) -> None:
+    """get_pinecone_index raises ValueError listing the existing indexes when name not found."""
+    mock_client_cls = mocker.patch("langchain_pinecone.vectorstores.PineconeClient")
+    existing = mocker.Mock()
+    existing.name = "other-index"
+    mock_client_cls.return_value.list_indexes.return_value.index_list = {
+        "indexes": [existing]
+    }
+
+    with pytest.raises(ValueError, match="other-index"):
+        PineconeVectorStore.get_pinecone_index("my-index", pinecone_api_key="test-key")
+
+
+def test_from_texts_orchestration(
+    mocker: MockerFixture, mock_index: MockType, mock_embedding: AsyncMockType
+) -> None:
+    """from_texts wires get_pinecone_index → constructor → add_texts and returns the store."""
+    mocker.patch.object(
+        PineconeVectorStore, "get_pinecone_index", return_value=mock_index
+    )
+    mock_embedding.embed_documents = mocker.Mock(
+        return_value=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    )
+
+    texts = ["text one", "text two"]
+    result = PineconeVectorStore.from_texts(
+        texts, mock_embedding, index_name="my-index", async_req=False
+    )
+
+    assert isinstance(result, PineconeVectorStore)
+    mock_embedding.embed_documents.assert_called_once_with(texts)
+    mock_index.upsert.assert_called_once()
+
+
+def test_from_existing_index_builds_store(
+    mocker: MockerFixture, mock_index: MockType, mock_embedding: AsyncMockType
+) -> None:
+    """from_existing_index constructs the store from a resolved index without embedding calls."""
+    mocker.patch.object(
+        PineconeVectorStore, "get_pinecone_index", return_value=mock_index
+    )
+
+    result = PineconeVectorStore.from_existing_index("my-index", mock_embedding)
+
+    assert isinstance(result, PineconeVectorStore)
+    mock_embedding.embed_documents.assert_not_called()
+    mock_embedding.aembed_documents.assert_not_called()
+
+
+async def test_afrom_texts_orchestration(
+    mocker: MockerFixture,
+    mock_embedding: AsyncMockType,
+    mock_pinecone_client: MockType,
+    mock_async_client: AsyncMockType,
+    mock_async_index: AsyncMockType,
+) -> None:
+    """afrom_texts constructs via index_name and delegates to aadd_texts."""
+    mock_embedding.aembed_documents = mocker.AsyncMock(
+        return_value=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    )
+
+    texts = ["text one", "text two"]
+    result = await PineconeVectorStore.afrom_texts(
+        texts,
+        mock_embedding,
+        index_name="my-index",
+        pinecone_api_key="test-key",
+    )
+
+    assert isinstance(result, PineconeVectorStore)
+    mock_embedding.aembed_documents.assert_called_once_with(texts)
+    mock_async_index.upsert.assert_called_once()
+
+
+# --- TC-006: PineconeVectorStore edge paths and relevance scoring ---
+
+
+def test_search_skips_match_without_text_key(
+    mocker: MockerFixture,
+    mock_index: MockType,
+    mock_embedding: AsyncMockType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """similarity_search_by_vector_with_score skips a match missing text_key and logs a warning."""
+    mock_index.query = mocker.Mock(
+        return_value={
+            "matches": [
+                {
+                    "metadata": {"text": "valid doc", "extra": "x"},
+                    "score": 0.9,
+                    "id": "good",
+                },
+                {"metadata": {"source": "no-text"}, "score": 0.5, "id": "bad"},
+            ]
+        }
+    )
+    vectorstore = PineconeVectorStore(
+        index=mock_index, embedding=mock_embedding, text_key="text"
+    )
+    with caplog.at_level(logging.WARNING, logger="langchain_pinecone.vectorstores"):
+        results = vectorstore.similarity_search_by_vector_with_score([0.1, 0.2, 0.3])
+
+    assert len(results) == 1
+    doc, score = results[0]
+    assert doc.page_content == "valid doc"
+    assert score == 0.9
+    assert "Skipping" in caplog.text
+
+
+async def test_asearch_skips_match_without_text_key(
+    mocker: MockerFixture,
+    mock_async_index: AsyncMockType,
+    mock_embedding: AsyncMockType,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """asimilarity_search_by_vector_with_score skips a match missing text_key and logs a warning."""
+    mock_async_index.query = mocker.AsyncMock(
+        return_value={
+            "matches": [
+                {
+                    "metadata": {"text": "valid doc", "extra": "x"},
+                    "score": 0.9,
+                    "id": "good",
+                },
+                {"metadata": {"source": "no-text"}, "score": 0.5, "id": "bad"},
+            ]
+        }
+    )
+    vectorstore = PineconeVectorStore(
+        index=mock_async_index, embedding=mock_embedding, text_key="text"
+    )
+    with caplog.at_level(logging.WARNING, logger="langchain_pinecone.vectorstores"):
+        results = await vectorstore.asimilarity_search_by_vector_with_score(
+            [0.1, 0.2, 0.3]
+        )
+
+    assert len(results) == 1
+    doc, score = results[0]
+    assert doc.page_content == "valid doc"
+    assert score == 0.9
+    assert "Skipping" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "strategy,expected_fn",
+    [
+        (DistanceStrategy.COSINE, PineconeVectorStore._cosine_relevance_score_fn),
+        (
+            DistanceStrategy.MAX_INNER_PRODUCT,
+            PineconeVectorStore._max_inner_product_relevance_score_fn,
+        ),
+        (
+            DistanceStrategy.EUCLIDEAN_DISTANCE,
+            PineconeVectorStore._euclidean_relevance_score_fn,
+        ),
+    ],
+)
+def test_select_relevance_score_fn_per_strategy(
+    mock_index: MockType,
+    mock_embedding: AsyncMockType,
+    strategy: DistanceStrategy,
+    expected_fn: Callable[[float], float],
+) -> None:
+    """_select_relevance_score_fn returns the expected callable for each DistanceStrategy."""
+    vectorstore = PineconeVectorStore(
+        index=mock_index,
+        embedding=mock_embedding,
+        text_key="text",
+        distance_strategy=strategy,
+    )
+    fn = vectorstore._select_relevance_score_fn()
+    assert fn is expected_fn
+
+
+def test_select_relevance_score_fn_raises_for_unknown_strategy(
+    mock_index: MockType,
+    mock_embedding: AsyncMockType,
+) -> None:
+    """_select_relevance_score_fn raises ValueError for an unrecognized strategy."""
+    vectorstore = PineconeVectorStore(
+        index=mock_index, embedding=mock_embedding, text_key="text"
+    )
+    vectorstore.distance_strategy = "UNKNOWN"  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="Unknown distance strategy"):
+        vectorstore._select_relevance_score_fn()
+
+
+def test_cosine_relevance_score_fn() -> None:
+    """_cosine_relevance_score_fn maps Pinecone's [-1, 1] score to [0, 1] via (score + 1) / 2."""
+    assert PineconeVectorStore._cosine_relevance_score_fn(-1.0) == pytest.approx(0.0)
+    assert PineconeVectorStore._cosine_relevance_score_fn(1.0) == pytest.approx(1.0)
+    assert PineconeVectorStore._cosine_relevance_score_fn(0.0) == pytest.approx(0.5)
+
+
+def test_sync_query_rejects_applyresult(
+    mocker: MockerFixture,
+    mock_index: MockType,
+    mock_embedding: AsyncMockType,
+) -> None:
+    """similarity_search_by_vector_with_score raises ValueError when index.query returns ApplyResult."""
+    try:
+        from pinecone.db_data.index import ApplyResult
+    except ImportError:
+        from pinecone.data.index import ApplyResult
+
+    mock_index.query = mocker.Mock(return_value=object.__new__(ApplyResult))
+    vectorstore = PineconeVectorStore(
+        index=mock_index, embedding=mock_embedding, text_key="text"
+    )
+    with pytest.raises(ValueError, match="asynchronous result from synchronous call"):
+        vectorstore.similarity_search_by_vector_with_score([0.1, 0.2, 0.3])
+
+
+def test_mmr_sync_query_rejects_applyresult(
+    mocker: MockerFixture,
+    mock_index: MockType,
+    mock_embedding: AsyncMockType,
+) -> None:
+    """max_marginal_relevance_search_by_vector raises ValueError when index.query returns ApplyResult."""
+    try:
+        from pinecone.db_data.index import ApplyResult
+    except ImportError:
+        from pinecone.data.index import ApplyResult
+
+    mock_index.query = mocker.Mock(return_value=object.__new__(ApplyResult))
+    vectorstore = PineconeVectorStore(
+        index=mock_index, embedding=mock_embedding, text_key="text"
+    )
+    with pytest.raises(ValueError, match="asynchronous result from synchronous call"):
+        vectorstore.max_marginal_relevance_search_by_vector([0.1, 0.2, 0.3])
+
+
+def test_delete_requires_an_argument(
+    mock_index: MockType,
+    mock_embedding: AsyncMockType,
+) -> None:
+    """delete() raises ValueError when none of ids, delete_all, or filter is provided."""
+    vectorstore = PineconeVectorStore(
+        index=mock_index, embedding=mock_embedding, text_key="text"
+    )
+    with pytest.raises(ValueError, match="ids, delete_all, or filter"):
+        vectorstore.delete()
+
+
+# --- FIX-003: Namespace fallback regression tests (issue #63) ---
+# Regression introduced in v0.2.11 (PR #60): kwargs.get("namespace", self._namespace)
+# did not fall back when namespace=None was explicitly passed through the call chain.
+# Fixed in PR #83 by splitting to kwargs.get("namespace") + if-None check.
+
+
+def test_similarity_search_with_score__honors_constructor_namespace(
+    mocker: MockerFixture,
+    mock_embedding: AsyncMockType,
+    mock_index: MockType,
+) -> None:
+    """similarity_search_with_score with no query-time namespace uses constructor namespace."""
+    mock_embedding.embed_query = mocker.Mock(return_value=[0.1, 0.2, 0.3])
+    mock_index.query = mocker.Mock(return_value={"matches": []})
+    vectorstore = PineconeVectorStore(
+        index=mock_index,
+        embedding=mock_embedding,
+        text_key="text",
+        namespace="constructor-ns",
+    )
+
+    vectorstore.similarity_search_with_score("test query")
+
+    assert mock_index.query.call_args.kwargs["namespace"] == "constructor-ns"
+
+
+@pytest.mark.asyncio
+async def test_asimilarity_search_with_score__honors_constructor_namespace(
+    mocker: MockerFixture,
+    mock_embedding: AsyncMockType,
+    mock_async_index: AsyncMockType,
+) -> None:
+    """asimilarity_search_with_score with no query-time namespace uses constructor namespace."""
+    mock_embedding.aembed_query = mocker.AsyncMock(return_value=[0.1, 0.2, 0.3])
+    mock_async_index.query = mocker.AsyncMock(return_value={"matches": []})
+    vectorstore = PineconeVectorStore(
+        index=mock_async_index,
+        embedding=mock_embedding,
+        text_key="text",
+        namespace="constructor-ns",
+    )
+
+    await vectorstore.asimilarity_search_with_score("test query")
+
+    assert mock_async_index.query.call_args.kwargs["namespace"] == "constructor-ns"
+
+
+def test_similarity_search__honors_constructor_namespace(
+    mocker: MockerFixture,
+    mock_embedding: AsyncMockType,
+    mock_index: MockType,
+) -> None:
+    """similarity_search with no query-time namespace uses constructor namespace.
+
+    This is the exact bug scenario: as_retriever(search_type="similarity") passes
+    namespace=None through the call chain, which must fall back to self._namespace.
+    """
+    mock_embedding.embed_query = mocker.Mock(return_value=[0.1, 0.2, 0.3])
+    mock_index.query = mocker.Mock(return_value={"matches": []})
+    vectorstore = PineconeVectorStore(
+        index=mock_index,
+        embedding=mock_embedding,
+        text_key="text",
+        namespace="constructor-ns",
+    )
+
+    vectorstore.similarity_search("test query")
+
+    assert mock_index.query.call_args.kwargs["namespace"] == "constructor-ns"
+
+
+@pytest.mark.asyncio
+async def test_asimilarity_search__honors_constructor_namespace(
+    mocker: MockerFixture,
+    mock_embedding: AsyncMockType,
+    mock_async_index: AsyncMockType,
+) -> None:
+    """asimilarity_search with no query-time namespace uses constructor namespace."""
+    mock_embedding.aembed_query = mocker.AsyncMock(return_value=[0.1, 0.2, 0.3])
+    mock_async_index.query = mocker.AsyncMock(return_value={"matches": []})
+    vectorstore = PineconeVectorStore(
+        index=mock_async_index,
+        embedding=mock_embedding,
+        text_key="text",
+        namespace="constructor-ns",
+    )
+
+    await vectorstore.asimilarity_search("test query")
+
+    assert mock_async_index.query.call_args.kwargs["namespace"] == "constructor-ns"
+
+
+# --- FIX-002: from_texts forwards pinecone_api_key to get_pinecone_index (issue #110) ---
+
+
+def test_from_texts_forwards_pinecone_api_key(
+    mocker: MockerFixture, mock_index: MockType, mock_embedding: AsyncMockType
+) -> None:
+    """from_texts passes the pinecone_api_key kwarg through to get_pinecone_index."""
+    mock_get_index = mocker.patch.object(
+        PineconeVectorStore, "get_pinecone_index", return_value=mock_index
+    )
+    mock_embedding.embed_documents = mocker.Mock(return_value=[[0.1, 0.2, 0.3]])
+
+    PineconeVectorStore.from_texts(
+        ["text"],
+        mock_embedding,
+        index_name="my-index",
+        pinecone_api_key="caller-supplied-key",
+        async_req=False,
+    )
+
+    mock_get_index.assert_called_once_with(
+        "my-index", 4, pinecone_api_key="caller-supplied-key"
+    )
+
+
+def test_from_texts_raises_when_no_api_key(
+    mocker: MockerFixture, mock_embedding: AsyncMockType
+) -> None:
+    """from_texts raises ValueError when neither pinecone_api_key kwarg nor env var is set."""
+    mocker.patch.dict("os.environ", {"PINECONE_API_KEY": ""})
+
+    with pytest.raises(ValueError, match="Pinecone API key"):
+        PineconeVectorStore.from_texts(
+            ["text"],
+            mock_embedding,
+            index_name="my-index",
+        )
+
+
+def test_similarity_score_threshold_retriever__honors_constructor_namespace(
+    mocker: MockerFixture,
+    mock_embedding: AsyncMockType,
+    mock_index: MockType,
+) -> None:
+    """as_retriever(similarity_score_threshold) with no query-time namespace uses constructor namespace.
+
+    The threshold retriever calls similarity_search_with_score internally;
+    verifies the namespace fallback survives the full retriever → vectorstore chain.
+    """
+    mock_embedding.embed_query = mocker.Mock(return_value=[0.1, 0.2, 0.3])
+    mock_index.query = mocker.Mock(return_value={"matches": []})
+    vectorstore = PineconeVectorStore(
+        index=mock_index,
+        embedding=mock_embedding,
+        text_key="text",
+        namespace="constructor-ns",
+    )
+
+    retriever = vectorstore.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={"score_threshold": 0.5, "k": 5},
+    )
+    retriever.invoke("test query")
+
+    assert mock_index.query.call_args.kwargs["namespace"] == "constructor-ns"

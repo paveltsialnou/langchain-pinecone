@@ -191,7 +191,9 @@ class TestPineconeRerank:
         self, mock_pinecone_client: MagicMock
     ) -> None:
         """Test client is preserved when explicitly provided."""
-        reranker = PineconeRerank(client=mock_pinecone_client, model="test-model")
+        reranker = PineconeRerank(
+            client=mock_pinecone_client, model="test-model", pinecone_api_key=API_KEY
+        )
         assert reranker.client == mock_pinecone_client
 
     @pytest.mark.asyncio
@@ -211,12 +213,24 @@ class TestPineconeRerank:
                 {"id": "doc_0", "text": "doc content", "source": "test"},
             ),
             (
+                Document(page_content="doc content", metadata={"id": "valid-id"}),
+                {"id": "valid-id", "text": "doc content"},
+            ),
+            (
                 {"id": "custom-id", "content": "dict content"},
                 {"id": "custom-id", "content": "dict content"},
             ),
             (
                 {"content": "dict content without id"},
                 {"id": "doc_0", "content": "dict content without id"},
+            ),
+            (
+                {"id": "", "content": "empty id"},
+                {"id": "doc_0", "content": "empty id"},
+            ),
+            (
+                {"id": 999, "content": "non-string id"},
+                {"id": "doc_0", "content": "non-string id"},
             ),
         ],
     )
@@ -231,10 +245,23 @@ class TestPineconeRerank:
 
     def test_rerank_empty_documents(self, mock_pinecone_client: MagicMock) -> None:
         """Test rerank returns empty list for empty documents."""
-        reranker = PineconeRerank(client=mock_pinecone_client, model="test-model")
+        reranker = PineconeRerank(
+            client=mock_pinecone_client, model="test-model", pinecone_api_key=API_KEY
+        )
         results = reranker.rerank([], "query")
         assert results == []
         mock_pinecone_client.inference.rerank.assert_not_called()
+
+    def test_rerank_client_raises_propagates_exception(
+        self, mock_pinecone_client: MagicMock
+    ) -> None:
+        """Test that a client-side exception propagates instead of returning []."""
+        mock_pinecone_client.inference.rerank.side_effect = RuntimeError("API error")
+        reranker = PineconeRerank(
+            client=mock_pinecone_client, model="test-model", pinecone_api_key=API_KEY
+        )
+        with pytest.raises(RuntimeError, match="API error"):
+            reranker.rerank(["some document"], "query")
 
     @pytest.mark.parametrize(
         "model,expected_parameters",
@@ -257,6 +284,7 @@ class TestPineconeRerank:
             top_n=2,
             rank_fields=["text"],
             return_documents=True,
+            pinecone_api_key=API_KEY,
         )
         documents = ["doc_1 content", "doc_2 content", "doc_3 content"]
         query = "test query"
@@ -276,7 +304,10 @@ class TestPineconeRerank:
         """Test compress_documents calls rerank and formats output as Documents."""
         # Setup reranker
         reranker = PineconeRerank(
-            client=mock_pinecone_client, model="test-model", return_documents=True
+            client=mock_pinecone_client,
+            model="test-model",
+            return_documents=True,
+            pinecone_api_key=API_KEY,
         )
 
         # Prepare documents and query
@@ -329,7 +360,10 @@ class TestPineconeRerank:
         """Test compress_documents when return_documents is False."""
         # Setup reranker
         reranker = PineconeRerank(
-            client=mock_pinecone_client, model="test-model", return_documents=False
+            client=mock_pinecone_client,
+            model="test-model",
+            return_documents=False,
+            pinecone_api_key=API_KEY,
         )
 
         # Prepare documents and query
@@ -371,7 +405,10 @@ class TestPineconeRerank:
         """Test compress_documents handles results where index is None."""
         # Setup reranker
         reranker = PineconeRerank(
-            client=mock_pinecone_client, model="test-model", return_documents=True
+            client=mock_pinecone_client,
+            model="test-model",
+            return_documents=True,
+            pinecone_api_key=API_KEY,
         )
 
         # Prepare documents and query
@@ -428,6 +465,7 @@ class TestPineconeRerank:
             model="test-model",
             rank_fields=["text"],
             return_documents=True,
+            pinecone_api_key=API_KEY,
         )
         results = reranker.rerank(docs_dict, "Latest news on climate change.")
         mock_pinecone_client.inference.rerank.assert_called_once_with(
@@ -451,11 +489,29 @@ class TestPineconeRerank:
     ) -> None:
         """Test arerank returns empty list for empty documents."""
         reranker = PineconeRerank(
-            async_client=mock_pinecone_async_client, model="test-model"
+            async_client=mock_pinecone_async_client,
+            model="test-model",
+            pinecone_api_key=API_KEY,
         )
         results = await reranker.arerank([], "query")
         assert results == []
         mock_pinecone_async_client.inference.rerank.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_arerank_client_raises_propagates_exception(
+        self, mock_pinecone_async_client: MagicMock
+    ) -> None:
+        """Test that a client-side exception propagates instead of returning []."""
+        mock_pinecone_async_client.inference.rerank.side_effect = RuntimeError(
+            "API error"
+        )
+        reranker = PineconeRerank(
+            async_client=mock_pinecone_async_client,
+            model="test-model",
+            pinecone_api_key=API_KEY,
+        )
+        with pytest.raises(RuntimeError, match="API error"):
+            await reranker.arerank(["some document"], "query")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -479,6 +535,7 @@ class TestPineconeRerank:
             top_n=2,
             rank_fields=["text"],
             return_documents=True,
+            pinecone_api_key=API_KEY,
         )
         documents = ["doc_1 content", "doc_2 content", "doc_3 content"]
         query = "test query"
@@ -501,6 +558,7 @@ class TestPineconeRerank:
             async_client=mock_pinecone_async_client,
             model="test-model",
             return_documents=True,
+            pinecone_api_key=API_KEY,
         )
 
         # Prepare documents and query
@@ -559,6 +617,7 @@ class TestPineconeRerank:
             async_client=mock_pinecone_async_client,
             model="test-model",
             return_documents=False,
+            pinecone_api_key=API_KEY,
         )
 
         # Prepare documents and query
@@ -615,6 +674,7 @@ class TestPineconeRerank:
             async_client=mock_pinecone_async_client,
             model="test-model",
             return_documents=True,
+            pinecone_api_key=API_KEY,
         )
 
         # Prepare documents and query
@@ -674,6 +734,7 @@ class TestPineconeRerank:
             model="test-model",
             rank_fields=["text"],
             return_documents=True,
+            pinecone_api_key=API_KEY,
         )
         results = await reranker.arerank(docs_dict, "Latest news on climate change.")
         mock_pinecone_async_client.inference.rerank.assert_called_once_with(
@@ -718,7 +779,7 @@ class TestPineconeRerank:
         invalid_client = MagicMock()
 
         # Use the _get_async_client method which checks the type
-        reranker = PineconeRerank(model="test-model")
+        reranker = PineconeRerank(model="test-model", pinecone_api_key=API_KEY)
         reranker.async_client = invalid_client  # Directly set an invalid client
 
         # Now when we try to use _get_async_client, it should verify the client type
@@ -769,3 +830,153 @@ class TestPineconeRerank:
         result = await rerank.alist_supported_models(vector_type="dense")
 
         assert result == mock_response
+
+    @pytest.mark.parametrize(
+        "model,truncate,expected",
+        [
+            ("cohere-rerank-3.5", "END", {}),
+            ("bge-reranker-v2-m3", "END", {"truncate": "END"}),
+            ("test-model", "START", {"truncate": "START"}),
+        ],
+    )
+    def test__rerank_params(
+        self,
+        model: str,
+        truncate: str,
+        expected: Dict[str, Any],
+    ) -> None:
+        """Test _rerank_params omits truncate for cohere-rerank-3.5 and includes it otherwise."""
+        reranker = PineconeRerank(model="test-model", pinecone_api_key=API_KEY)
+        assert reranker._rerank_params(model=model, truncate=truncate) == expected
+
+    @pytest.mark.parametrize("return_documents", [True, False])
+    def test_rerank_maps_result_shape(
+        self,
+        mock_pinecone_client: MagicMock,
+        mock_rerank_response: MagicMock,
+        return_documents: bool,
+    ) -> None:
+        """Test rerank result dicts always have id/index/score; document present only when return_documents=True."""
+        mock_pinecone_client.inference.rerank.return_value = mock_rerank_response
+        reranker = PineconeRerank(
+            client=mock_pinecone_client,
+            model="test-model",
+            return_documents=return_documents,
+            pinecone_api_key=API_KEY,
+        )
+        results = reranker.rerank(["doc1", "doc2"], "query")
+        assert len(results) == 2
+        for item in results:
+            assert "id" in item
+            assert "index" in item
+            assert "score" in item
+            if return_documents:
+                assert "document" in item
+            else:
+                assert "document" not in item
+
+    @pytest.mark.parametrize("return_documents", [True, False])
+    async def test_arerank_maps_result_shape(
+        self,
+        mock_pinecone_async_client: MagicMock,
+        mock_rerank_response: MagicMock,
+        return_documents: bool,
+    ) -> None:
+        """Test arerank result dicts always have id/index/score; document present only when return_documents=True."""
+        mock_pinecone_async_client.inference.rerank.return_value = mock_rerank_response
+        reranker = PineconeRerank(
+            async_client=mock_pinecone_async_client,
+            model="test-model",
+            return_documents=return_documents,
+            pinecone_api_key=API_KEY,
+        )
+        results = await reranker.arerank(["doc1", "doc2"], "query")
+        assert len(results) == 2
+        for item in results:
+            assert "id" in item
+            assert "index" in item
+            assert "score" in item
+            if return_documents:
+                assert "document" in item
+            else:
+                assert "document" not in item
+
+    def test_compress_documents_empty_input(
+        self, mock_pinecone_client: MagicMock
+    ) -> None:
+        """Test compress_documents returns [] for empty input without calling rerank."""
+        reranker = PineconeRerank(
+            client=mock_pinecone_client,
+            model="test-model",
+            pinecone_api_key=API_KEY,
+        )
+        with patch("langchain_pinecone.rerank.PineconeRerank.rerank") as mock_rerank:
+            result = reranker.compress_documents([], "query")
+        assert result == []
+        mock_rerank.assert_not_called()
+
+    async def test_acompress_documents_empty_input(
+        self, mock_pinecone_async_client: MagicMock
+    ) -> None:
+        """Test acompress_documents returns [] for empty input without calling arerank."""
+        reranker = PineconeRerank(
+            async_client=mock_pinecone_async_client,
+            model="test-model",
+            pinecone_api_key=API_KEY,
+        )
+        with patch(
+            "langchain_pinecone.rerank.PineconeRerank.arerank", new_callable=AsyncMock
+        ) as mock_arerank:
+            result = await reranker.acompress_documents([], "query")
+        assert result == []
+        mock_arerank.assert_not_called()
+
+    def test_compress_documents_out_of_range_index(
+        self, mock_pinecone_client: MagicMock
+    ) -> None:
+        """Test compress_documents skips results whose index is out of bounds."""
+        reranker = PineconeRerank(
+            client=mock_pinecone_client,
+            model="test-model",
+            return_documents=True,
+            pinecone_api_key=API_KEY,
+        )
+        documents = [
+            Document(page_content="Document 1 content", metadata={"source": "a"}),
+            Document(page_content="Document 2 content", metadata={"source": "b"}),
+        ]
+        with patch("langchain_pinecone.rerank.PineconeRerank.rerank") as mock_rerank:
+            mock_rerank.return_value = [
+                {"id": "doc_0", "index": 0, "score": 0.9},
+                {"id": "out-of-range", "index": 5, "score": 0.5},
+            ]
+            compressed_docs = reranker.compress_documents(documents, "query")
+        assert len(compressed_docs) == 1
+        assert compressed_docs[0].page_content == "Document 1 content"
+        assert compressed_docs[0].metadata["relevance_score"] == 0.9
+
+    async def test_acompress_documents_out_of_range_index(
+        self, mock_pinecone_async_client: MagicMock
+    ) -> None:
+        """Test acompress_documents skips results whose index is out of bounds."""
+        reranker = PineconeRerank(
+            async_client=mock_pinecone_async_client,
+            model="test-model",
+            return_documents=True,
+            pinecone_api_key=API_KEY,
+        )
+        documents = [
+            Document(page_content="Document 1 content", metadata={"source": "a"}),
+            Document(page_content="Document 2 content", metadata={"source": "b"}),
+        ]
+        with patch(
+            "langchain_pinecone.rerank.PineconeRerank.arerank", new_callable=AsyncMock
+        ) as mock_arerank:
+            mock_arerank.return_value = [
+                {"id": "doc_0", "index": 0, "score": 0.9},
+                {"id": "out-of-range", "index": 5, "score": 0.5},
+            ]
+            compressed_docs = await reranker.acompress_documents(documents, "query")
+        assert len(compressed_docs) == 1
+        assert compressed_docs[0].page_content == "Document 1 content"
+        assert compressed_docs[0].metadata["relevance_score"] == 0.9
